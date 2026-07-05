@@ -2,6 +2,8 @@ from fastapi import APIRouter, Request, Query, BackgroundTasks, HTTPException, R
 from app.router import handle_message
 from app.services.firestore import is_duplicate, mark_processed
 import os
+import sys
+import traceback
 import hmac, hashlib
 
 router = APIRouter()
@@ -57,5 +59,7 @@ async def process_webhook(body: dict):
             contact_name=contact_name,
         )
     except Exception as e:
-        print(f"Error processing webhook: {e}")
+        print(f"Error processing webhook: {e}", flush=True)
+        traceback.print_exc(file=sys.stdout)
+        sys.stdout.flush()
         # Never raise — return silently so Meta doesn't retry

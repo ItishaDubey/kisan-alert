@@ -1,6 +1,7 @@
 from app.services.gemini import classify_intent, generate_advisory
 from app.services.stt import transcribe_audio
-from app.services.firestore import get_or_create_farmer, update_session, update_farmer_language
+from app.services.firestore import get_or_create_farmer, update_session, update_farmer_language, update_farmer
+from app.services.geocoding import resolve_district
 from app.whatsapp import send_text, send_voice_note, send_interactive_language_select
 from app.modules.weather import get_weather_advisory
 from app.modules.crop_rag import diagnose_crop
@@ -18,11 +19,6 @@ async def handle_message(wa_id, message, msg_type, phone_number_id, contact_name
     farmer = await get_or_create_farmer(wa_id, contact_name)
     language = farmer.get("language", "hi")  # Default Hindi
 
-    # First-time users: ask language preference
-    if farmer.get("is_new"):
-        await send_interactive_language_select(wa_id, phone_number_id)
-        return
-
     # Handle interactive button reply (language selection)
     if msg_type == "interactive":
         selected = message.get("interactive", {}).get("button_reply", {}).get("id", "")
@@ -30,6 +26,21 @@ async def handle_message(wa_id, message, msg_type, phone_number_id, contact_name
         if selected in lang_map:
             await update_farmer_language(wa_id, lang_map[selected])
             await send_text(wa_id, phone_number_id, get_welcome_message(lang_map[selected]))
+            return
+
+    # First-time users: ask language preference
+    if farmer.get("is_new"):
+        await send_interactive_language_select(wa_id, phone_number_id)
+        return
+
+    # No village/district on file yet: treat the next text reply as the answer
+    # (weather and crop-recommend modules need this to do anything useful)
+    if not farmer.get("district") and msg_type == "text":
+        location_text = message.get("text", {}).get("body", "").strip()
+        if location_text:
+            _, _, address = await resolve_district(location_text)
+            await update_farmer(wa_id, {"district": address})
+            await send_text(wa_id, phone_number_id, get_district_saved_message(language, address))
             return
 
     # Extract text from message
@@ -95,6 +106,16 @@ def classify_intent_simple(text: str) -> str:
         if any(kw in text_lower for kw in keywords):
             return intent
     return "general"
+
+
+def get_district_saved_message(lang: str, address: str) -> str:
+    messages = {
+        "hi": f"Dhanyavaad! Aapka location save ho gaya: {address}. Ab aap sinchai, fasal, ya kisi bhi sawaal ke baare mein pooch sakte hain.",
+        "kn": f"Dhanyavadagalu! Nimma location save aagide: {address}. Ivu neeru, bele, athava yaava prashne bekaadaru keliri.",
+        "mr": f"Dhanyavaad! Tumche location save zale: {address}. Aata tumhi paani, pik, kiva konatihi prashna vicharu shakta.",
+        "te": f"Dhanyavaadamulu! Mee location save ayyindi: {address}. Ippudu meeru neeru, pantalu, leda edaina prashna adagavachu.",
+    }
+    return messages.get(lang, messages["hi"])
 
 
 def get_welcome_message(lang: str) -> str:
