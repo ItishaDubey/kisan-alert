@@ -1,5 +1,6 @@
 from app.services.gemini import diagnose_with_vision, generate_advisory
 from app.services.firestore import log_crop_case, get_or_create_farmer
+from app.services.rag import retrieve_similar_diseases
 from app.whatsapp import download_media, send_text
 import os
 
@@ -24,13 +25,27 @@ async def diagnose_crop(
         image_bytes = await download_media(image_id)
         diagnosis = await diagnose_with_vision(image_bytes, text, language)
     else:
-        # Text description via Gemini + RAG
+        # Text description via Gemini + RAG: retrieve similar known diseases
+        # from the ICAR knowledge base and ground the prompt in them.
+        matches = await retrieve_similar_diseases(text, top_k=3)
+        if matches:
+            reference_block = "\n".join(
+                f"- {m['name']} ({m['crop']}): symptoms — {m['symptoms']} "
+                f"cause — {m['cause']} remedy — {m['remedy']}"
+                for m in matches
+            )
+        else:
+            reference_block = "(no knowledge base entries available)"
+
         prompt = f"""
 Farmer describes: "{text}"
 Farmer's crop: {farmer.get('crop', 'unknown')}
 Farmer's district: {district}
 
-Diagnose the crop issue:
+Reference: possible matches from the ICAR crop disease knowledge base, most similar first:
+{reference_block}
+
+Using the reference entries where relevant (they may not all apply — use judgment), diagnose the crop issue:
 1. Most likely disease or pest (specific name in local and scientific)
 2. Likely cause
 3. Recommended remedy with exact product name, dosage, and application method
